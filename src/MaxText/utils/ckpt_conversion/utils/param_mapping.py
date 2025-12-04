@@ -39,6 +39,7 @@ import numpy as np
 
 import jax
 import jax.numpy as jnp
+from MaxText.layers import gemma3
 
 
 def GEMMA3_MAXTEXT_TO_HF_PARAM_MAPPING(config, maxtext_config, scan_layers=False):
@@ -131,10 +132,45 @@ def GEMMA3_MAXTEXT_TO_HF_PARAM_MAPPING(config, maxtext_config, scan_layers=False
   ]
 
   if scan_layers:
-    for mx, hf in text_params:
-      key = f"params-decoder-layers-{mx}"
-      mapping[key] = [f"model.language_model.layers.{i}.{hf}" for i in range(Ndec)]
+    # we assume `mapping` already has the non-layer entries filled above:
+    # "params-token_embedder-embedding", "params-decoder-decoder_norm-scale", etc.
+
+    # Gemma3: pattern positions (6) × scan steps (10) = 60 layers + 2 remainder = 62
+    pattern_len = len(gemma3.GEMMA3_ATTENTION_PATTERN)  # 6
+    scan_len = Ndec // pattern_len  # 62 // 6 = 10
+    rem = Ndec % pattern_len  # 2
+
+    # 1) Main scanned pattern positions: decoder/layers/layers_0..layers_5
+    # Each layers_k param stacks over the 10 scan steps:
+    # HF indices: k, k+6, k+12, ..., k+6*(scan_len-1)
+    for pattern_idx in range(pattern_len):  # 0..5
+      hf_layer_indices = [
+        pattern_idx + pattern_len * step  # k + 6*step
+        for step in range(scan_len)  # 0..9
+      ]
+
+      for mx, hf in text_params:
+        # Match your real MaxText keys:
+        #   params-decoder-layers-layers_0-mlp-wi_0-kernel
+        key = f"params-decoder-layers-layers_{pattern_idx}-{mx}"
+        # Return LIST → triggers _build_single_axis_stacked_tensor
+        mapping[key] = [
+          f"model.language_model.layers.{i}.{hf}" for i in hf_layer_indices
+        ]
+
+    # 2) Remainder HF layers: decoder/layers_remainder/layers_0..layers_(rem-1)
+    # These are the last `rem` layers: indices pattern_len*scan_len .. Ndec-1
+    if rem > 0:
+      base = pattern_len * scan_len  # 6 * 10 = 60
+      for rem_id in range(rem):  # 0,1 → HF layers 60,61
+        hf_layer_index = base + rem_id
+        for mx, hf in text_params:
+          key = f"params-decoder-layers_remainder-layers_{rem_id}-{mx}"
+          # Still a LIST so the generic stacker runs (len(list) == 1 here)
+          mapping[key] = [f"model.language_model.layers.{hf_layer_index}.{hf}"]
+
   else:
+    # non-scanned mapping (unchanged)
     for i in range(Ndec):
       for mx, hf in text_params:
         key = f"params-decoder-layers_{i}-{mx}"
@@ -251,28 +287,77 @@ def GEMMA3_MAXTEXT_TO_HF_PARAM_HOOK_FN(config, maxtext_config, scan_layers=False
   # Text layers
   tc = config.get("text_config", {})
   nlayers = tc.get("num_hidden_layers", 0)
-  layer_ids = [None] if scan_layers else list(range(nlayers))
-  for i in layer_ids:
-    pref = f"params-decoder-layers_{i}-" if i is not None else "params-decoder-layers-"
-    # Attention Q/K/V/O
-    hooks[pref + "self_attention-query-kernel"] = reshape_kernel
-    hooks[pref + "self_attention-key-kernel"] = reshape_kernel
-    hooks[pref + "self_attention-value-kernel"] = reshape_kernel
-    hooks[pref + "self_attention-out-kernel"] = reshape_kernel
-    # Norm scales
-    for nm in [
+
+  if scan_layers:
+    # Gemma3 scanned layout: `layers` (pattern positions) + `layers_remainder` (tail)
+    from MaxText.layers import gemma3
+    pattern_len = len(gemma3.GEMMA3_ATTENTION_PATTERN)  # 6
+    scan_len = nlayers // pattern_len  # 10
+    rem = nlayers % pattern_len  # 2
+
+    # 1) Main scanned pattern positions: decoder/layers/layers_0..layers_5
+    for pattern_idx in range(pattern_len):
+      pref = f"params-decoder-layers-layers_{pattern_idx}-"
+      # Q/K/V/O kernels
+      hooks[pref + "self_attention-query-kernel"] = reshape_kernel
+      hooks[pref + "self_attention-key-kernel"] = reshape_kernel
+      hooks[pref + "self_attention-value-kernel"] = reshape_kernel
+      hooks[pref + "self_attention-out-kernel"] = reshape_kernel
+      # Norm scales
+      for nm in [
         "pre_self_attention_norm-scale",
         "post_self_attention_norm-scale",
         "self_attention-query_norm-scale",
         "self_attention-key_norm-scale",
         "pre_ffw_norm-scale",
         "post_ffw_norm-scale",
-    ]:
-      hooks[pref + nm] = scale_rmsnorm
-    # MLP
-    hooks[pref + "mlp-wi_0-kernel"] = reshape_kernel
-    hooks[pref + "mlp-wi_1-kernel"] = reshape_kernel
-    hooks[pref + "mlp-wo-kernel"] = reshape_kernel
+      ]:
+        hooks[pref + nm] = scale_rmsnorm
+      # MLP
+      hooks[pref + "mlp-wi_0-kernel"] = reshape_kernel
+      hooks[pref + "mlp-wi_1-kernel"] = reshape_kernel
+      hooks[pref + "mlp-wo-kernel"] = reshape_kernel
+
+    # 2) Remainder blocks: decoder/layers_remainder/layers_0..layers_(rem-1)
+    for rem_id in range(rem):
+      pref = f"params-decoder-layers_remainder-layers_{rem_id}-"
+      hooks[pref + "self_attention-query-kernel"] = reshape_kernel
+      hooks[pref + "self_attention-key-kernel"] = reshape_kernel
+      hooks[pref + "self_attention-value-kernel"] = reshape_kernel
+      hooks[pref + "self_attention-out-kernel"] = reshape_kernel
+      for nm in [
+        "pre_self_attention_norm-scale",
+        "post_self_attention_norm-scale",
+        "self_attention-query_norm-scale",
+        "self_attention-key_norm-scale",
+        "pre_ffw_norm-scale",
+        "post_ffw_norm-scale",
+      ]:
+        hooks[pref + nm] = scale_rmsnorm
+      hooks[pref + "mlp-wi_0-kernel"] = reshape_kernel
+      hooks[pref + "mlp-wi_1-kernel"] = reshape_kernel
+      hooks[pref + "mlp-wo-kernel"] = reshape_kernel
+
+  else:
+    # Non-scanned: per-layer hooks with params-decoder-layers_{i}- prefixes
+    for i in range(nlayers):
+      pref = f"params-decoder-layers_{i}-"
+      hooks[pref + "self_attention-query-kernel"] = reshape_kernel
+      hooks[pref + "self_attention-key-kernel"] = reshape_kernel
+      hooks[pref + "self_attention-value-kernel"] = reshape_kernel
+      hooks[pref + "self_attention-out-kernel"] = reshape_kernel
+      for nm in [
+        "pre_self_attention_norm-scale",
+        "post_self_attention_norm-scale",
+        "self_attention-query_norm-scale",
+        "self_attention-key_norm-scale",
+        "pre_ffw_norm-scale",
+        "post_ffw_norm-scale",
+      ]:
+        hooks[pref + nm] = scale_rmsnorm
+      hooks[pref + "mlp-wi_0-kernel"] = reshape_kernel
+      hooks[pref + "mlp-wi_1-kernel"] = reshape_kernel
+      hooks[pref + "mlp-wo-kernel"] = reshape_kernel
 
   # Vision layers
   vc = config.get("vision_config", {})
