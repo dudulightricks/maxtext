@@ -175,6 +175,34 @@ def _load_full_state_from_path(
     p = epath.Path(path)
     return ocp.StandardCheckpointer().restore(p, abstract_unboxed_pre_state)
 
+def create_mine(checkpoint_dir: str, use_async=True, checkpointing_timeout=600, use_zarr3=False, save_buffer_size=None, restore_buffer_size=None):
+  p = epath.Path(checkpoint_dir)
+  p.mkdir(exist_ok=True, parents=True)
+
+  opts = ocp.CheckpointManagerOptions(
+    enable_async_checkpointing=use_async,
+    step_format_fixed_length=8,  # to make the format of "00000000"
+    async_options=ocp.AsyncOptions(
+      timeout_secs=checkpointing_timeout,  # default timeout for async operations
+    ),
+  )
+  registry = ocp.DefaultCheckpointHandlerRegistry()
+  train_state_handler = ocp.PyTreeCheckpointHandler(
+    save_concurrent_gb=save_buffer_size,
+    restore_concurrent_gb=restore_buffer_size,
+    use_zarr3=use_zarr3,
+  )
+  registry.add(
+    "train_state",
+    ocp.args.PyTreeSave,
+    train_state_handler,
+  )
+  manager = ocp.CheckpointManager(
+    directory=p,
+    options=opts,
+    handler_registry=registry,
+  )
+  return manager
 
 def create_orbax_checkpoint_manager(
     checkpoint_dir: str,
@@ -698,12 +726,30 @@ def save_checkpoint(checkpoint_manager, step, state, config=None, data_iterator=
       config.checkpoint_storage_target_data_file_size_bytes if config else DEFAULT_OCDBT_TARGET_DATA_FILE_SIZE
   )
 
-  checkpoint_args = ocp.args.PyTreeSave(
-      item=state,
-      save_args=jax.tree.map(lambda _: ocp.SaveArgs(chunk_byte_size=chunk_byte_size), state),
+  # checkpoint_args = ocp.args.PyTreeSave(
+  #     item=state,
+  #     save_args=jax.tree.map(lambda _: ocp.SaveArgs(chunk_byte_size=chunk_byte_size), state),
+  #     ocdbt_target_data_file_size=chunk_byte_size,
+  # )
+  def state_dict_to_structure_dict(state_dict):
+      return jax.tree_util.tree_map(
+          lambda t: {
+              "shape": tuple(t.shape),
+              "dtype": t.dtype.name,
+          },
+          state_dict,
+          is_leaf=lambda t: isinstance(t, jax.Array),
+        )
+
+  composite = ocp.args.Composite(
+    train_state=ocp.args.PyTreeSave(
+      state,
       ocdbt_target_data_file_size=chunk_byte_size,
+    ),
+    config=ocp.args.JsonSave(config),
+    meta_params=ocp.args.JsonSave(state_dict_to_structure_dict(state.params)),
   )
-  save_args_composite = {"items": checkpoint_args}
+  # save_args_composite = {"items": checkpoint_args}
 
   if config and config.dataset_type == "grain" and not isinstance(data_iterator, PlaceHolderDataIterator):
     if not isinstance(data_iterator, list):
@@ -722,6 +768,7 @@ def save_checkpoint(checkpoint_manager, step, state, config=None, data_iterator=
         checkpoint_manager, (EmergencyCheckpointManager, EmergencyReplicatorCheckpointManager)
     ):
       replicator_error_handler(config)
-      return checkpoint_manager.save(step, args=Composite(state=checkpoint_args), force=force)
+      return checkpoint_manager.save(step, args=composite, force=force)
     case _:
-      return checkpoint_manager.save(step, args=Composite(**save_args_composite), force=force)
+      return checkpoint_manager.save(step, args=composite, force=force)
+
