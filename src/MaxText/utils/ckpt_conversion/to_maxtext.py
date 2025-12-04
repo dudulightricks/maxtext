@@ -565,9 +565,20 @@ def main(args: Sequence[str], test_args: Sequence[str]) -> None:
       # on this object during the saving process.
       final_mt_weights.append(LazyTensor(load_fn, mt_target_shape_final, abstract_leaf_value.dtype, name=mt_param_key))
     else:
-      # In eager mode, we execute the function immediately to get the
-      # NumPy array and append it to our list of weights.
-      final_mt_tensor_numpy = load_fn()
+      try:
+        final_mt_tensor_numpy = load_fn()
+      except ValueError as e:
+        print("==== CONVERSION FAILURE ====")
+        print("mt_param_key        :", mt_param_key)
+        print("mt_target_shape     :", mt_target_shape_final)
+        print("hf_source_keys_or_key:", hf_source_keys_or_key)
+        if hook_fn is None:
+          print("hook_fn             : None")
+        else:
+          print("hook_fn             :", getattr(hook_fn, "__name__", str(hook_fn)))
+        print("error               :", repr(e))
+        raise
+
       if final_mt_tensor_numpy.shape != mt_target_shape_final:
         raise ValueError(
             f"Shape mismatch for {mt_param_key}: Expected {mt_target_shape_final}, got {final_mt_tensor_numpy.shape}"

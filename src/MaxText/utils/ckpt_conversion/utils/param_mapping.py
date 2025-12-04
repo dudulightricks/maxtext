@@ -106,7 +106,7 @@ def GEMMA3_MAXTEXT_TO_HF_PARAM_MAPPING(config, maxtext_config, scan_layers=False
   if scan_layers:
     for i in range(Nvis):
       for mx, hf in vision_params:
-        key = f"params-vision_encoder-Gemma3VisionEncoderLayer_0-Transformer-encoderblock-{mx}"
+        key = f"params-vision_encoder-Gemma3VisionEncoderLayer_0-Transformer-encoderblock_{i}-{mx}"
         mapping[key] = f"model.vision_tower.vision_model.encoder.layers.{i}.{hf}"
   else:
     for i in range(Nvis):
@@ -162,12 +162,13 @@ def GEMMA3_MAXTEXT_TO_HF_PARAM_MAPPING(config, maxtext_config, scan_layers=False
     # These are the last `rem` layers: indices pattern_len*scan_len .. Ndec-1
     if rem > 0:
       base = pattern_len * scan_len  # 6 * 10 = 60
-      for rem_id in range(rem):  # 0,1 → HF layers 60,61
+      for rem_id in range(rem):      # 0,1 → HF layers 60,61
         hf_layer_index = base + rem_id
         for mx, hf in text_params:
           key = f"params-decoder-layers_remainder-layers_{rem_id}-{mx}"
-          # Still a LIST so the generic stacker runs (len(list) == 1 here)
-          mapping[key] = [f"model.language_model.layers.{hf_layer_index}.{hf}"]
+          # ⬇️ 1-to-1 mapping: NOT a list
+          mapping[key] = f"model.language_model.layers.{hf_layer_index}.{hf}"
+
 
   else:
     # non-scanned mapping (unchanged)
@@ -362,13 +363,11 @@ def GEMMA3_MAXTEXT_TO_HF_PARAM_HOOK_FN(config, maxtext_config, scan_layers=False
   # Vision layers
   vc = config.get("vision_config", {})
   nvis = vc.get("num_hidden_layers", 0)
-  vision_layer_ids = [None] if scan_layers else list(range(nvis))
-  for i in vision_layer_ids:
-    base = (
-        f"params-vision_encoder-Gemma3VisionEncoderLayer_0-Transformer-encoderblock_{i}-"
-        if i is not None
-        else "params-vision_encoder-Gemma3VisionEncoderLayer_0-Transformer-encoderblock-"
-    )
+
+  # Vision layers: not scanned → always per-layer hooks
+  for i in range(nvis):
+    base = f"params-vision_encoder-Gemma3VisionEncoderLayer_0-Transformer-encoderblock_{i}-"
+
     # Attention kernels & biases
     for qkv in ["query", "key", "value"]:
       hooks[base + f"MultiHeadDotProductAttention_0-{qkv}-kernel"] = reshape_kernel
@@ -380,6 +379,7 @@ def GEMMA3_MAXTEXT_TO_HF_PARAM_HOOK_FN(config, maxtext_config, scan_layers=False
     for dense in ["Dense_0", "Dense_1"]:
       hooks[base + f"MlpBlockViT_0-{dense}-kernel"] = reshape_kernel
 
+      hooks[base + f"MlpBlockViT_0-{dense}-bias"] = vis_bias
   return hooks
 
 
