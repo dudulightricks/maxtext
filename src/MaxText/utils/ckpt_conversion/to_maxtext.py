@@ -453,13 +453,13 @@ def main(args: Sequence[str], test_args: Sequence[str]) -> None:
     max_logging.log("HuggingFace model loaded and converted to NumPy.")
     print_ram_usage("After full HF model load")
 
-  checkpoint_manager = checkpointing.create_orbax_checkpoint_manager(
+  checkpoint_manager = checkpointing.create_mine(
       output_directory,
-      enable_checkpointing=True,
+      # enable_checkpointing=True,
       use_async=False,  # Synchronous saving for simplicity in conversion script
-      save_interval_steps=1,  # Save at step 0
-      use_ocdbt=config.checkpoint_storage_use_ocdbt,
-      use_zarr3=config.checkpoint_storage_use_zarr3,
+      # save_interval_steps=1,  # Save at step 0
+      # use_ocdbt=config.checkpoint_storage_use_ocdbt,
+      # use_zarr3=config.checkpoint_storage_use_zarr3,
   )
 
   max_logging.log("Initializing MaxText abstract model...")
