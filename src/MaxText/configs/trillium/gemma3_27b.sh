@@ -39,10 +39,10 @@ fi
 # Train
 export LIBTPU_INIT_ARGS="--xla_tpu_scoped_vmem_limit_kib=122880 --xla_tpu_use_minor_sharding_for_major_trivial_input=true --xla_tpu_relayout_group_size_threshold_for_reduce_scatter=1 --xla_tpu_assign_all_reduce_scatter_layout --xla_tpu_enable_async_collective_fusion_fuse_all_gather=true --xla_tpu_enable_async_collective_fusion_multiple_steps=true --xla_tpu_overlap_compute_collective_tc=true --xla_enable_async_all_gather=true"
 
-python3 -m MaxText.$EXECUTABLE "${MAXTEXT_PKG_DIR:-${MAXTEXT_REPO_ROOT:-$PWD}/src/MaxText}"/configs/base.yml model_name=gemma3-27b\
-  steps=15 per_device_batch_size=2 enable_checkpointing=false\
-  remat_policy=full ici_fsdp_transpose_parallelism=256 ici_fsdp_parallelism=-1\
-  max_target_length=8192 base_output_directory=$OUTPUT_PATH\
+python3 -m MaxText.$EXECUTABLE "${MAXTEXT_PKG_DIR:-${MAXTEXT_REPO_ROOT:-$PWD}/src/MaxText}"/configs/base.yml model_name=gemma3-4b\
+  steps=15 per_device_batch_size=1 enable_checkpointing=false\
+  remat_policy=full ici_fsdp_parallelism=-1\
+  max_target_length=1024 base_output_directory=$OUTPUT_PATH\
   reuse_example_batch=1 dataset_type=synthetic gcs_metrics=true\
-  attention='flash' sa_block_q=2048 sa_block_q_dkv=2048 sa_block_q_dq=2048
+  attention='flash' sa_block_q=1024 sa_block_q_dkv=1024 sa_block_q_dq=1024
 

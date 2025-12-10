@@ -923,6 +923,7 @@ class Decoder(nn.Module):
 
     # The API of the Decoder is now a tuple, providing both the main output
     # and the raw hidden state needed for auxiliary tasks.
+    jax.debug.breakpoint()
     return logits, hidden_state, kv_caches
 
   def _apply_gemma3_scanned_blocks(

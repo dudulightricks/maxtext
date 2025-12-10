@@ -56,6 +56,7 @@ class SyntheticDataIterator:
         sequence_positions, (config.global_batch_size_to_load, config.max_target_length + 1)
     )
     segmentation = jnp.ones((config.global_batch_size_to_load, config.max_target_length), dtype=jnp.int32)
+    segmentation = segmentation.at[:, -100:].set(0)
     self.data = (tokens, batch_positions, segmentation)
 
   def __iter__(self):
